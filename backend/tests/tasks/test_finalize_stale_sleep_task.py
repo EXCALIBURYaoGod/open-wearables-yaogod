@@ -177,6 +177,8 @@ class TestFinalizeStaleSleepsTask:
         # Assert
         assert result is None
         mock_load_state.assert_called_once_with(user_id)
+        # An expired key must not leave the user in the active set for good.
+        mock_redis.srem.assert_called_once()
 
     @patch("app.integrations.celery.tasks.finalize_stale_sleep_task.finish_sleep")
     @patch("app.integrations.celery.tasks.finalize_stale_sleep_task.load_sleep_state")
