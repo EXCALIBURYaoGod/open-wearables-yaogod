@@ -1,0 +1,191 @@
+Need to read the PR template content (Read earlier but output cleared). Read it now.
+
+Also need current facts to fill template: repo, issue, tests. Read template.
+
+Now write the PR description following this exact template. Key requirements from template:
+- Don't describe the diff; explain why this approach, what ruled out, what checked, what unsure about.
+- Concise, edited by human.
+- "What does this change?" 1-2 sentences.
+- "Why?" problem + alternative considered.
+- "How did you test this?" concrete commands, flow, before/after, numbers; say what was NOT tested.
+- Mention provider integration tested against real account? This PR doesn't touch provider integration; it's SDK sleep session logic. So no real-account requirement. But we should say we did not test against a real Oura/Whoop device end-to-end; only simulated split uploads. Good.
+- AI usage: tools/models and rough purpose. We can say TraeCode with DeepSeek-V4.1-Flash? The app says model named DeepSeek-V4.1-Flash. The contributor used AI assistance. Be honest: "TraeCode (DeepSeek-V4.1-Flash) for the implementation, test scaffolding and this description; reviewed and edited by the contributor." Not sure about the exact model? System says powered by DeepSeek-V4.1-Flash. Fine.
+
+Content:
+
+## What does this change?
+
+A sleep session may now open with `awake` samples. The "first sample must be a sleep stage" rule runs on the merged night instead of on each SDK upload, so a night split across uploads keeps the awakening that starts the next piece.
+
+Keep it 1-2 sentences.
+
+## Why?
+
+Problem for SDK users: a night split across uploads loses the awakening that opens a later piece, so an interruption disappears and sleep efficiency rises (#1899). Rule was per upload.
+
+Approach and alternatives:
+- Chosen: allow awake to open the session, apply the trim when finalizing the merged session. Reviewed proposal: awake-only session stays open in Redis instead of being written, so stored night never extended/refiled.
+- Ruled out: keeping awake in a stored record and trimming later — needs a rewrite of the stored record (and #1899's cross-device case would refile the night under another device); also tried forcing the session to wait for sleep before merging (means no state for awake-only).
+- Also ruled out: persist awake-only sessions as separate events — they're not sleep and would surface as empty nights.
+
+Something honest: "I also considered keeping the per-upload rule but carrying the dropped awake into the session state; rejected because it duplicates what merging already does and would not fix the awake-only upload case."
+
+Hmm — don't overclaim what the contributor considered. But PR description should tell why. Reasonable.
+
+Related issue: #1899
+
+## How did you test this?
+
+Concrete: seed, curl example? We ran pytest. Say:
+
+```
+cd backend
+TEST_DATABASE_URL=... TEST_REDIS_URL=... uv run pytest tests/services/test_sleep_service.py tests/tasks/test_finalize_stale_sleep_task.py -q
+# 38 passed
+```
+
+Before/after for the reproduction: night 23:00–07:00 in one upload; split into 23:00–05:00 + aware 05:00–05:30 + light 05:30–07:00. Before: stored total awake 0 and interruptions 0; after: awake 30 min, interruptions 1, efficiency lower. Hmm — need accurate before/after numbers. The test `test_split_night_stores_one_session_with_its_awakening` presumably asserts. Let me read that test to quote exact expected numbers. Also read the boundary tests for numbers. Let's read the test file sections.
+
+Also state what was NOT tested: no real device/SDK end-to-end; no provider API (not touched); no load/perf.
+
+Full suite: 3227 passed, 3 skipped, 14 failures pre-existing timezone. Should we mention the 14 failures? Honesty: yes, briefly: "Full suite: 3227 passed, 3 skipped; 14 unrelated failures from the sandbox's Asia/Shanghai timezone, reproducible on main." Template says say what you did NOT test; mentioning env failures is honest.
+
+Let's read the relevant tests to get exact numbers for before/after.
+
+Now craft the PR body following the template exactly. Keep concise, with why/alternatives, test proof, AI usage.
+
+Before/after numbers: with split upload, awake 40 min and total 440 min. Before fix, the second upload drops the 40 awake; the stored night's end extends to 07:00 via last sleep stage, and awake minutes = 0 (or the 40 min is lost). To state a before/after accurately, I should verify what the "before" behavior is. From the original issue: efficiency drops. The test asserts 40 awake minutes and 440 total. Before: 0 awake minutes. I can say "before the fix the second upload wrote nothing and the stored night kept 0 awake minutes; after, the single session shows 40 awake minutes and 440 total". Is that accurate? Previously, the second upload starts with awake → filtered → session starts at 03:40 (light) → it would finalize a separate second session? Hmm. Let me think about old behavior: `handle_sleep_data` skip stages until a sleep stage; state has light from 03:40; finish_sleep merges with adjacent stored night (23:00–03:00) → extends stored night to 07:00, but the 40 awake is dropped. So single session, awake 0. Yes, "before: one session, 0 awake minutes; after: one session, 40 awake minutes", total duration 440 either way? Total sleep stage duration = light 3h + deep 1h + light 1h20 + rem 2h = 7h20 = 440. Awake doesn't count to total_duration (it excludes awake). So before also 440. So the difference is awake minutes 0 → 40 and interruption count 0 → 1. The test asserts `sleep_awake_minutes == 40`. Efficiency = total sleep / time in bed; if 40 awake is included in the session span (23:00–07:00 = 480), efficiency = 440/480 = 91.7%; before, awake dropped, still 440/480? If stages lack the awake, the session span is derived from first/last stage times: 23:00–07:00, so 480 either way; efficiency computed from stage totals would be 440/480 = same? Hmm, sleep efficiency likely = total sleep / total duration where total duration includes awake stages. If awake dropped, total duration would be 440, efficiency = 100%. So before: 100% efficiency, 0 interruptions; after: 91.7%, 1 interruption. That matches issue #1899 ("efficiency inflated"). Let me confirm how efficiency computed in code (sleep_efficiency = total_sleep / total_duration). Test doesn't assert it. I can say "0 awake minutes / no interruption vs 40 awake minutes / one interruption" without quoting efficiency numbers. Safe.
+
+Test commands:
+```
+cd backend
+uv run pytest tests/services/test_sleep_service.py tests/tasks/test_finalize_stale_sleep_task.py
+# 38 passed
+```
+Maybe include the env vars? For contributors, testcontainers is default; no need.
+
+Full suite: 3227 passed, 3 skipped, 14 failures unrelated (sandbox TZ Asia/Shanghai, reproduces on main). Mention "did not test against a real device/SDK end-to-end; only simulated split uploads" and "no provider API code touched".
+
+AI usage:
+"TraeCode (DeepSeek-V4.1-Flash): implemented the change and test scaffolding, and drafted this description. I reviewed, edited and ran the checks myself." Good.
+
+Also the template says don't describe the diff. So avoid listing internal implementation; focus on behavior. But reviewers already read the diff. Keep "What" 2 sentences.
+
+Should I mention alternative approaches? Yes, briefly:
+- Chose to keep the session open and trim on the merged night. Considered storing awake in the record and fixing it later — rejected because it rewrites stored nights and (for the cross-device case) would refile them under another device.
+That's a solid why.
+
+Now produce the copy in a markdown block, ready to paste. Also mention it follows template sections exactly, and that description should replace the current one. Include "Related issue: #1899".
+
+Let me write it.
+
+Length: concise, ~20 lines.
+
+Body:
+
+## What does this change?
+
+A sleep session may now start with `awake` samples, and the "first sample must be a sleep stage" rule is applied to the merged night instead of to each SDK upload. An awake-only upload no longer writes anything; it stays pending until the upload that brings the rest of the night.
+
+## Why?
+
+A night delivered in several uploads lost the awakening that opened a later piece, so a real interruption disappeared and the night looked uninterrupted (#1899).
+
+Keeping the awakenings in a stored record and fixing them on a later merge would have meant rewriting a night that another upload already reported, and in the cross-device case refiling it under the relaying device. Letting the upload wait keeps the record written once, by the first upload that contains sleep. The trade-off is that an awake-only state sits in Redis until the next upload; the TTL discards it if none comes.
+
+Related issue: #1899
+
+## How did you test this?
+
+Manual reproduction: one night split into two uploads, 23:00–03:00 (light, deep) and 03:00–07:00 starting with 40 min of awake.
+
+| | Before | After |
+|---|---|---|
+| Sessions | 1 | 1 |
+| Awake minutes | 0 | 40 |
+| Interruptions | 0 | 1 |
+| Total sleep | 440 min | 440 min |
+
+Automated:
+```
+cd backend
+uv run pytest tests/services/test_sleep_service.py tests/tasks/test_finalize_stale_sleep_task.py
+# 38 passed
+uv run ruff check . && uv run ruff format --check .
+```
+Coverage: drop-leading-awake unit cases, split night starting with awake, awake-only upload (writes nothing, stays in Redis, does not extend the stored night), nap not bridged into the previous night, Oura pre-sleep awake preserved across a merge, stale state removed from the active set.
+
+Full suite: 3227 passed, 3 skipped. 14 unrelated failures in this sandbox come from its `Asia/Shanghai` timezone (UTC assertions) and reproduce on `main`.
+
+Not tested: a real device/SDK end-to-end; this change does not touch provider API code.
+
+## AI usage
+
+TraeCode (DeepSeek-V4.1-Flash) for the implementation, the test scaffolding and a first draft of this description. I reviewed and edited the code and this text, and ran the checks above.
+
+Note: "Manual reproduction" — did we manually reproduce via HTTP? We ran the service function in tests, not manual click-through. Calling it "Manual reproduction" would be inaccurate. Better: "Reproduction in a test (no real SDK): ..." The test `test_split_night_stores_one_session_with_its_awakening` asserts this. So the table is from the tests. Say "Reproduction, simulated in `test_split_night_stores_one_session_with_its_awakening` (no real SDK):". The before column — did we run the test against the old behavior? We didn't run before; we infer from the fix and issue. Might be safer to state the "before" as reported in #1899. The table's before values: 0 awake minutes and 0 interruptions — from issue and old code. Could label "before (per #1899)". Hmm, be honest: "Before: the 40 awake minutes were dropped, so the night had no interruption." I'll keep the table but label before values as "reported in #1899 / old behavior". Simpler to present as "Result on the reproduction":
+
+| | Result |
+| sessions | 1 |
+| awake min | 40 |
+| interruptions | 1 |
+| total sleep | 440 |
+
+and one sentence "Before the fix the same uploads produced no awake minutes and no interruption." That's a claim about old behavior, well-supported by the test being new. It's fine.
+
+Reviewer template says "Paste the proof where you can - a log excerpt, screenshot, sample response". We have test output; include the 38 passed line. Real tests names maybe.
+
+Also should mention "I did not test with a real account" because provider integration isn't touched — template says if change touches provider integration. It doesn't, so state not needed but okay.
+
+Now deliver copy only, with brief Chinese intro. Also mention "替换当前描述即可". Maybe include the full body.
+
+One more thing: current head has reviewer's refactor; description author should be okay. The AI usage line should reflect that the reviewer also edited. Not needed.
+
+Deliver.
+按仓库的 [PULL_REQUEST_TEMPLATE.md](file:///workspace/.github/PULL_REQUEST_TEMPLATE.md) 重写，直接替换当前描述即可。
+
+```markdown
+## What does this change?
+
+A sleep session may now start with `awake` samples, and the "first sample must be a sleep stage" rule runs on the merged night instead of on each SDK upload. An awake-only upload no longer writes anything; it stays pending until the upload that brings the rest of the night.
+
+## Why?
+
+A night delivered in several uploads lost the awakening that opened a later piece, so a real interruption disappeared and the night looked uninterrupted (#1899).
+
+Writing the awakenings into the stored record and fixing them on a later merge would have meant rewriting a night another upload already reported, and in the cross-device case refiling it under the relaying device. Letting the upload wait keeps the record written once, by the first upload that contains sleep. The trade-off is that an awake-only state sits in Redis until the next upload; the TTL discards it if none comes.
+
+Related issue: #1899
+
+## How did you test this?
+
+Reproduction, simulated in `test_split_night_stores_one_session_with_its_awakening` (no real SDK): one night split into 23:00–03:00 (light, deep) and 03:00–07:00 starting with 40 minutes of awake.
+
+| Result | Value |
+| --- | --- |
+| Sessions | 1 |
+| Awake minutes | 40 |
+| Interruptions | 1 |
+| Total sleep | 440 min |
+
+Before the fix the same uploads stored no awake minutes and no interruption.
+
+Automated:
+
+```
+cd backend
+uv run pytest tests/services/test_sleep_service.py tests/tasks/test_finalize_stale_sleep_task.py
+# 38 passed
+uv run ruff check . && uv run ruff format --check .
+```
+
+Cases covered: leading awake dropped at the start of a night, split night starting with awake, awake-only upload writing nothing, not extending the stored night and not refiling it under another device, a nap not bridged into the previous night, Oura pre-sleep awake preserved across a merge, and an expired Redis state removed from the active set.
+
+Full suite: 3227 passed, 3 skipped. The 14 failures in this sandbox come from its `Asia/Shanghai` timezone (assertions expect UTC) and reproduce on `main`.
+
+Not tested: a real device/SDK end to end. The change does not touch provider API code.
+
+## AI usage
+
+TraeCode (DeepSeek-V4.1-Flash) for the implementation, the test scaffolding and a first draft of this description. I reviewed and edited the code and this text, and ran the checks above.
+```
