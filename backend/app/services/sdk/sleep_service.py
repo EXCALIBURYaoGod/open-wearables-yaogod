@@ -554,9 +554,8 @@ def finish_sleep(db_session: DbSession, user_id: str, state: SleepState) -> None
     ordered = sorted(state.stages, key=lambda stage: stage.start_time)
     first_sleep = next((stage for stage in ordered if stage.stage in _SLEEP_STAGES), None)
     if first_sleep is None:
-        # Awake-only session: the rest of the night arrives in a later upload, and the
-        # Redis TTL discards it if that upload never comes.  Saving it now would grow
-        # the stored night past its last sleep stage.
+        # Saving awake alone would grow the stored night past its last sleep stage, so it
+        # waits in Redis for the rest of the night (the TTL discards it otherwise).
         return
 
     # The lookup starts at the first sleep stage so that leading awake cannot bridge
@@ -584,16 +583,14 @@ def finish_sleep(db_session: DbSession, user_id: str, state: SleepState) -> None
             with contextlib.suppress(Exception):
                 stages.append(SleepStateStage.model_validate(s))
 
-    # Awake before the night's first sleep stage is pre-sleep wakefulness, not part of
-    # it.  Trim only up to the stored record: the awake it already counted has to stay
-    # counted, even though stored stages keep no `in_bed` to mark the night's start.
+    # Trim only up to the stored record: stored stages keep no `in_bed`, so the awake it
+    # already counted would be dropped again.
     stages = _drop_leading_awake(
         stages,
         protect_from=adjacent.start_datetime if adjacent is not None else None,
     )
 
     # Recalculate metrics from stages to handle overlaps/duplicates
-    # state.stages is a list[SleepStateStage]
     metrics, cleaned_stages = _calculate_final_metrics(stages)
 
     if cleaned_stages:
@@ -625,8 +622,6 @@ def finish_sleep(db_session: DbSession, user_id: str, state: SleepState) -> None
         Decimal(str(total_sleep_seconds / time_in_bed_seconds * 100)) if time_in_bed_seconds > 0 else None
     )
 
-    source_name = state.source_name or "unknown"
-
     sleep_record = EventRecordCreate(
         id=uuid4(),
         external_id=state.uuid,
@@ -637,7 +632,7 @@ def finish_sleep(db_session: DbSession, user_id: str, state: SleepState) -> None
         duration_seconds=int(total_duration),
         category="sleep",
         type="sleep_session",
-        source_name=source_name,
+        source_name=state.source_name or "unknown",
         source=source_for_lookup,
         provider=state.provider,
         device_model=state.device_model,

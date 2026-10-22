@@ -158,11 +158,6 @@ cython_debug/
 docker/volumes/
 volumes
 
-# Redis persistence
-dump.rdb
-appendonly.aof
-appendonlydir/
-
 # SSL certificates
 *.pem
 
